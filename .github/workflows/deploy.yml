@@ -1,0 +1,41 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build application
+        run: npm run build
+
+  deploy:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    # 這裡的部署步驟以 Render 平台為例（支援 Vite + Express 全端應用）
+    # 若您使用其他平台 (如 Zeabur, Vercel, Heroku)，可以替換此步驟
+    steps:
+      - name: Trigger Deploy Hook (e.g. Render / Zeabur)
+        run: |
+          if [ -z "${{ secrets.DEPLOY_HOOK_URL }}" ]; then
+            echo "Deploy hook secret is missing. Please set DEPLOY_HOOK_URL in GitHub Secrets to deploy automatically."
+            exit 0
+          fi
+          echo "Triggering deployment..."
+          curl -X POST "${{ secrets.DEPLOY_HOOK_URL }}"
