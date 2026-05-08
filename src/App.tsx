@@ -23,8 +23,25 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils.ts';
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, signOut } from "firebase/auth";
+
+// 請在這邊填入你的 Firebase 設定 (從 Firebase Console 的 Project Settings -> Web App 取得)
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const provider = new GoogleAuthProvider();
 
 export default function App() {
+  const [user, setUser] = useState<User | null>(null);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'fuel' | 'maintenance' | 'settings'>('dashboard');
   const [fuelRecords, setFuelRecords] = useState<FuelRecord[]>([]);
   const [maintenanceRecords, setMaintenanceRecords] = useState<MaintenanceRecord[]>([]);
@@ -42,10 +59,24 @@ export default function App() {
     if (savedUnit) setUnit(savedUnit as UnitType);
     if (savedFuelType) setFuelType(savedFuelType as FuelType);
     if (savedCapacity) setTankCapacity(Number(savedCapacity));
+  }, []);
+
+  // Listen to auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (!currentUser) setIsLoaded(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch data only when user is logged in
+  useEffect(() => {
+    if (!user) return;
     
     const fetchRecords = async () => {
       try {
-        const res = await fetch('/api/records?userId=default_user');
+        const res = await fetch(`/api/records?userId=${user.uid}`);
         const json = await res.json();
         if (json.success) {
           setFuelRecords(json.data.fuelRecords || []);
@@ -59,7 +90,7 @@ export default function App() {
     };
     
     fetchRecords();
-  }, []);
+  }, [user]);
 
   // Save settings to localStorage
   useEffect(() => {
@@ -109,6 +140,7 @@ export default function App() {
   }, [fuelRecords, tankCapacity]);
 
   const addFuelRecord = async (record: Omit<FuelRecord, 'id' | 'consumption'>) => {
+    if (!user) return;
     const newRecord: FuelRecord = {
       ...record,
       id: crypto.randomUUID(),
@@ -118,7 +150,7 @@ export default function App() {
       await fetch('/api/records/fuel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'default_user', record: newRecord })
+        body: JSON.stringify({ userId: user.uid, record: newRecord })
       });
     } catch (e) {
       console.error(e);
@@ -126,15 +158,17 @@ export default function App() {
   };
 
   const deleteFuelRecord = async (id: string) => {
+    if (!user) return;
     setFuelRecords(prev => prev.filter(r => r.id !== id));
     try {
-      await fetch(`/api/records/fuel/${id}?userId=default_user`, { method: 'DELETE' });
+      await fetch(`/api/records/fuel/${id}?userId=${user.uid}`, { method: 'DELETE' });
     } catch (e) {
       console.error(e);
     }
   };
 
   const addMaintenanceRecord = async (record: Omit<MaintenanceRecord, 'id'>) => {
+    if (!user) return;
     const newRecord: MaintenanceRecord = {
       ...record,
       id: crypto.randomUUID(),
@@ -144,7 +178,7 @@ export default function App() {
       await fetch('/api/records/maintenance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: 'default_user', record: newRecord })
+        body: JSON.stringify({ userId: user.uid, record: newRecord })
       });
     } catch (e) {
       console.error(e);
@@ -152,15 +186,42 @@ export default function App() {
   };
 
   const deleteMaintenanceRecord = async (id: string) => {
+    if (!user) return;
     setMaintenanceRecords(prev => prev.filter(r => r.id !== id));
     try {
-      await fetch(`/api/records/maintenance/${id}?userId=default_user`, { method: 'DELETE' });
+      await fetch(`/api/records/maintenance/${id}?userId=${user.uid}`, { method: 'DELETE' });
     } catch (e) {
       console.error(e);
     }
   };
 
   if (!isLoaded) return null;
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-bg text-text">
+        <div className="max-w-sm w-full p-8 bg-surface rounded-2xl shadow-2xl border border-border text-center">
+          <div className="w-16 h-16 bg-primary/20 rounded-2xl flex items-center justify-center mx-auto mb-6 text-primary shadow-[0_0_20px_rgba(59,130,246,0.3)]">
+            <Fuel size={32} />
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">AutoTrack Pro</h1>
+          <p className="text-muted mb-8 text-sm">請登入以管理您的愛車紀錄</p>
+          <button 
+            onClick={() => signInWithPopup(auth, provider)}
+            className="w-full py-3 bg-white text-black font-bold rounded-xl hover:bg-gray-200 transition-colors flex items-center justify-center gap-2"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24">
+              <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+            </svg>
+            使用 Google 帳號登入
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-bg text-text font-sans pb-20">
@@ -173,9 +234,12 @@ export default function App() {
             </div>
             AutoTrack Pro
           </h1>
-          <div className="text-[10px] font-bold uppercase tracking-widest text-muted border border-border py-1 px-3 rounded-full bg-bg">
-            v1.0.0
-          </div>
+          <button 
+            onClick={() => signOut(auth)}
+            className="text-[10px] font-bold uppercase tracking-widest text-muted border border-border py-1 px-3 rounded-full bg-bg hover:text-white hover:bg-red-500/20 transition-colors"
+          >
+            登出
+          </button>
         </div>
       </header>
 
