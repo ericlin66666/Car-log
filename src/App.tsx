@@ -33,32 +33,41 @@ export default function App() {
   const [tankCapacity, setTankCapacity] = useState<number>(50);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load data from localStorage
+  // Load settings from localStorage and records from Firebase API
   useEffect(() => {
-    const savedFuel = localStorage.getItem('carButler_fuel');
-    const savedMaint = localStorage.getItem('carButler_maintenance');
     const savedUnit = localStorage.getItem('carButler_unit');
     const savedFuelType = localStorage.getItem('carButler_fuelType');
     const savedCapacity = localStorage.getItem('carButler_capacity');
 
-    if (savedFuel) setFuelRecords(JSON.parse(savedFuel));
-    if (savedMaint) setMaintenanceRecords(JSON.parse(savedMaint));
     if (savedUnit) setUnit(savedUnit as UnitType);
     if (savedFuelType) setFuelType(savedFuelType as FuelType);
     if (savedCapacity) setTankCapacity(Number(savedCapacity));
     
-    setIsLoaded(true);
+    const fetchRecords = async () => {
+      try {
+        const res = await fetch('/api/records?userId=default_user');
+        const json = await res.json();
+        if (json.success) {
+          setFuelRecords(json.data.fuelRecords || []);
+          setMaintenanceRecords(json.data.maintenanceRecords || []);
+        }
+      } catch (err) {
+        console.error("Failed to load records from Firebase", err);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    
+    fetchRecords();
   }, []);
 
-  // Save data to localStorage
+  // Save settings to localStorage
   useEffect(() => {
     if (!isLoaded) return;
-    localStorage.setItem('carButler_fuel', JSON.stringify(fuelRecords));
-    localStorage.setItem('carButler_maintenance', JSON.stringify(maintenanceRecords));
     localStorage.setItem('carButler_unit', unit);
     localStorage.setItem('carButler_fuelType', fuelType);
     localStorage.setItem('carButler_capacity', tankCapacity.toString());
-  }, [fuelRecords, maintenanceRecords, unit, tankCapacity, isLoaded]);
+  }, [unit, fuelType, tankCapacity, isLoaded]);
 
   // Calculate fuel consumption logic
   const processedFuelRecords = useMemo(() => {
@@ -99,28 +108,56 @@ export default function App() {
     return results.reverse(); // Newest first for display
   }, [fuelRecords, tankCapacity]);
 
-  const addFuelRecord = (record: Omit<FuelRecord, 'id' | 'consumption'>) => {
+  const addFuelRecord = async (record: Omit<FuelRecord, 'id' | 'consumption'>) => {
     const newRecord: FuelRecord = {
       ...record,
       id: crypto.randomUUID(),
     };
-    setFuelRecords([...fuelRecords, newRecord]);
+    setFuelRecords(prev => [...prev, newRecord]);
+    try {
+      await fetch('/api/records/fuel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'default_user', record: newRecord })
+      });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const deleteFuelRecord = (id: string) => {
-    setFuelRecords(fuelRecords.filter(r => r.id !== id));
+  const deleteFuelRecord = async (id: string) => {
+    setFuelRecords(prev => prev.filter(r => r.id !== id));
+    try {
+      await fetch(`/api/records/fuel/${id}?userId=default_user`, { method: 'DELETE' });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const addMaintenanceRecord = (record: Omit<MaintenanceRecord, 'id'>) => {
+  const addMaintenanceRecord = async (record: Omit<MaintenanceRecord, 'id'>) => {
     const newRecord: MaintenanceRecord = {
       ...record,
       id: crypto.randomUUID(),
     };
-    setMaintenanceRecords([...maintenanceRecords, newRecord]);
+    setMaintenanceRecords(prev => [...prev, newRecord]);
+    try {
+      await fetch('/api/records/maintenance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: 'default_user', record: newRecord })
+      });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const deleteMaintenanceRecord = (id: string) => {
-    setMaintenanceRecords(maintenanceRecords.filter(r => r.id !== id));
+  const deleteMaintenanceRecord = async (id: string) => {
+    setMaintenanceRecords(prev => prev.filter(r => r.id !== id));
+    try {
+      await fetch(`/api/records/maintenance/${id}?userId=default_user`, { method: 'DELETE' });
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   if (!isLoaded) return null;

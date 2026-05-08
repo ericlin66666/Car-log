@@ -3,16 +3,28 @@ import { createServer as createViteServer } from "vite";
 import path from "path";
 import admin from "firebase-admin";
 
+import fs from "fs";
+
 // 嘗試初始化 Firebase Admin
 try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT && !admin.apps.length) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  let serviceAccount = null;
+  const keyPath = path.join(process.cwd(), 'firebase-key.json');
+
+  if (fs.existsSync(keyPath)) {
+    // 優先讀取根目錄的 firebase-key.json 檔案
+    serviceAccount = JSON.parse(fs.readFileSync(keyPath, 'utf8'));
+  } else if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    // 否則讀取環境變數
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  }
+
+  if (serviceAccount && !admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
     console.log("🔥 Firebase Admin 初始化成功");
   } else {
-    console.warn("⚠️ 尚未設定 FIREBASE_SERVICE_ACCOUNT 環境變數，Firebase 將不會啟動");
+    console.warn("⚠️ 尚未找到 firebase-key.json 或 FIREBASE_SERVICE_ACCOUNT，Firebase 將不會啟動");
   }
 } catch (error) {
   console.error("Firebase 初始化失敗:", error);
@@ -33,7 +45,7 @@ async function startServer() {
     if (!db) return res.status(500).json({ success: false, error: "Firebase 尚未初始化" });
     try {
       const userId = req.query.userId || 'default_user';
-      
+
       const fuelRef = await db.collection('users').doc(userId).collection('fuelRecords').get();
       const fuelRecords = fuelRef.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
@@ -53,7 +65,7 @@ async function startServer() {
       const userId = req.body.userId || 'default_user';
       const record = req.body.record;
       if (!record || !record.id) return res.status(400).json({ error: "無效的紀錄" });
-      
+
       await db.collection('users').doc(userId).collection('fuelRecords').doc(record.id).set(record);
       res.json({ success: true });
     } catch (error) {
@@ -72,12 +84,39 @@ async function startServer() {
       res.status(500).json({ success: false, error: error.message });
     }
   });
+
+  // 新增/更新保養紀錄
+  app.post("/api/records/maintenance", async (req, res) => {
+    if (!db) return res.status(500).json({ success: false, error: "Firebase 尚未初始化" });
+    try {
+      const userId = req.body.userId || 'default_user';
+      const record = req.body.record;
+      if (!record || !record.id) return res.status(400).json({ error: "無效的紀錄" });
+
+      await db.collection('users').doc(userId).collection('maintenanceRecords').doc(record.id).set(record);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // 刪除保養紀錄
+  app.delete("/api/records/maintenance/:id", async (req, res) => {
+    if (!db) return res.status(500).json({ success: false, error: "Firebase 尚未初始化" });
+    try {
+      const userId = req.query.userId || 'default_user';
+      await db.collection('users').doc(userId).collection('maintenanceRecords').doc(req.params.id).delete();
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
   // ===============================================
 
   // API to fetch oil price from Taiwan CPC
   app.get("/api/oil-price", async (req, res) => {
     const requestedType = req.query.type || "超級柴油";
-    
+
     // List of potential endpoints to try
     const endpoints = [
       {
@@ -97,15 +136,18 @@ async function startServer() {
         console.log(`Attempting to fetch from: ${endpoint.url}`);
         const response = await fetch(endpoint.url, {
           headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
-            'Referer': 'https://www.cpc.com.tw/'
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Referer': 'https://www.cpc.com.tw/',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
           },
-          signal: AbortSignal.timeout(5000) // 5 seconds timeout
+          signal: AbortSignal.timeout(8000) // Increase timeout to 8 seconds
         });
 
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-        
+
         let text = await response.text();
         if (!text || text.trim() === "") throw new Error("Empty response");
 
@@ -128,13 +170,13 @@ async function startServer() {
          * The api.cpc.com.tw might return { status: '...', data: [...] }
          */
         let items = Array.isArray(data) ? data : (data.data || []);
-        
-        const targetItem = items.find((item) => 
-          item['產品名稱'] === requestedType || 
+
+        const targetItem = items.find((item) =>
+          item['產品名稱'] === requestedType ||
           item['產品'] === requestedType ||
           item['name'] === requestedType
         );
-        
+
         if (!targetItem) {
           console.warn(`${requestedType} not found in ${endpoint.url}`);
           continue; // Try next endpoint
@@ -142,7 +184,7 @@ async function startServer() {
 
         const priceStr = targetItem['參考零售價'] || targetItem['價格'] || targetItem['price'];
         const cpcPrice = parseFloat(priceStr);
-        
+
         if (isNaN(cpcPrice)) throw new Error("Invalid price format");
 
         const isDiesel = requestedType.includes('柴油');
@@ -175,7 +217,7 @@ async function startServer() {
 
     const cpcBase = defaultPrices[requestedType] || 30.0;
     const isDieselFallback = requestedType.includes('柴油');
-    
+
     res.json({
       success: true,
       data: {
